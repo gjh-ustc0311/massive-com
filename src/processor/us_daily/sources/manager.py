@@ -14,6 +14,9 @@ class FetchError(Exception):
     pass
 
 
+MAX_RETRIES = 3
+
+
 class SourceManager:
     def __init__(self, sources: List[BaseSource]):
         self.sources = sources
@@ -21,25 +24,29 @@ class SourceManager:
     def fetch_daily(
         self, ticker: str, start_date: str, end_date: str
     ) -> Tuple[pd.DataFrame, str]:
-        """Try each source in priority order. Return (df, source_name).
+        """Try each source in priority order, retrying up to MAX_RETRIES times.
 
-        Raises FetchError if all sources fail or return empty data.
+        Return (df, source_name). Raises FetchError if all sources fail.
         """
         errors = []
         for source in self.sources:
-            try:
-                time.sleep(source.request_interval)
-                df = source.fetch_daily(ticker, start_date, end_date)
-                if df is not None and not df.empty:
-                    return df, source.name
-                else:
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    time.sleep(source.request_interval)
+                    df = source.fetch_daily(ticker, start_date, end_date)
+                    if df is not None and not df.empty:
+                        return df, source.name
                     logger.debug(
-                        f"{source.name} returned empty data for {ticker}"
+                        f"{source.name} returned empty data for {ticker} "
+                        f"(attempt {attempt}/{MAX_RETRIES})"
                     )
-            except Exception as e:
-                logger.warning(f"{source.name} failed for {ticker}: {e}")
-                errors.append(f"{source.name}: {e}")
-                continue
+                except Exception as e:
+                    logger.warning(
+                        f"{source.name} failed for {ticker} "
+                        f"(attempt {attempt}/{MAX_RETRIES}): {e}"
+                    )
+                    if attempt == MAX_RETRIES:
+                        errors.append(f"{source.name}: {e}")
         raise FetchError(
             f"All sources failed for {ticker}: {'; '.join(errors)}"
         )
